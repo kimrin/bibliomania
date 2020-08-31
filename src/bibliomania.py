@@ -6,10 +6,12 @@ import re
 import sys
 import time
 import urllib.parse
+from io import BytesIO
 from pprint import pprint
 
 import pandas as pd
 import requests
+from openpyxl.drawing.image import Image
 from requests.exceptions import HTTPError
 from tqdm import tqdm
 
@@ -80,10 +82,13 @@ def js2row(di={}, json=None):
         "isbn13": "".join([v['identifier'] for v in vinfo['industryIdentifiers'] if v['type'] == 'ISBN_13']),
     }
 
+    if len(list(di.keys())) == 0:
+        return {k: [v] for k, v in rowdict.items()}
+
     for k, v in di.items():
-        dik = di.get(k, [])
-        dik.append(rowdict[k])
-        di[k] = dik
+        u = v[:]
+        u.append(rowdict[k])
+        di[k] = u
 
     return di
 
@@ -104,23 +109,38 @@ def fetch(isbn=None):
         print(f'Other error occurred: {err}')
 
 
-def to_excel(df=None, excelfile=None):
+def fetch_image(url=None):
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        # access JSOn content
+        return Image.open(BytesIO(response.content))
+
+    except HTTPError as http_err:
+        print(f'HTTP error occurred: {http_err}')
+    except Exception as err:
+        print(f'Other error occurred: {err}')
+
+
+def to_excel(df=None, dffile=None, excelfile=None):
     from openpyxl import Workbook
-    from openpyxl.drawing.image import Image
     from openpyxl.utils.dataframe import dataframe_to_rows
     from openpyxl.utils.cell import get_column_letter
     columns = ["image", "title", "authors", "categories",
                "description", "image url", "isbn13"]
 
+    df.sort_values('isbn13')
+    df.to_csv(dffile)
+
     wb = Workbook()
     ws = wb.active
 
-    ws[1] = columns
     for i in range(len(columns)):
         ws[f"{get_column_letter(i + 1)}1"] = columns[i]
 
-    for idx, url in enumerate(df['image url']):
-        ws.add_image(Image(url), f"{get_column_letter(c + 1)}{idx + 2}")
+    for idx, url in enumerate(tqdm(df['image url'])):
+        img = fetch_image(url)
+        ws.add_image(img, f"{get_column_letter(1)}{idx + 2}")
         time.sleep(1.2)
         for j, k in enumerate(columns[1:]):
             ws[f"{get_column_letter(j + 2)}{idx + 2}"] = df[k][idx]
@@ -129,6 +149,8 @@ def to_excel(df=None, excelfile=None):
 
 
 def main(csvfile=os.path.join(os.path.dirname(__file__), "..", "csv", "books.csv"),
+         dffile=os.path.join(os.path.dirname(__file__),
+                             "..", "csv", "exceldata.csv"),
          excelfile=os.path.join(os.path.dirname(__file__), "..", "csv", "books.xlsx")):
     df = convert(csvfile=csvfile)
     df.to_csv(os.path.join(os.path.dirname(__file__), "..", "csv", "isbn.csv"))
@@ -142,7 +164,7 @@ def main(csvfile=os.path.join(os.path.dirname(__file__), "..", "csv", "books.csv
     df_out = pd.DataFrame(data, columns=[
                           "image", "title", "authors", "categories", "description", "image url", "isbn13"])
 
-    to_excel(df=df_out, excelfile=excelfile)
+    to_excel(df=df_out, dffile=dffile, excelfile=excelfile)
 
 
 if __name__ == "__main__":
