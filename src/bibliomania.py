@@ -116,8 +116,12 @@ def to_excel(df=None, excelfile=None):
     ws = wb.active
 
     ws[1] = columns
+    for i in range(len(columns)):
+        ws[f"{get_column_letter(i + 1)}1"] = columns[i]
+
     for idx, url in enumerate(df['image url']):
         ws.add_image(Image(url), f"{get_column_letter(c + 1)}{idx + 2}")
+        time.sleep(1.2)
         for j, k in enumerate(columns[1:]):
             ws[f"{get_column_letter(j + 2)}{idx + 2}"] = df[k][idx]
 
