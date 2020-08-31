@@ -15,6 +15,12 @@ from openpyxl.drawing.image import Image
 from requests.exceptions import HTTPError
 from tqdm import tqdm
 
+try:
+    from PIL import Image as PILImage
+except ImportError:
+    PILImage = False
+
+
 ISISBN13 = re.compile("^978([0-9]{10})$")
 ISJAN = re.compile("^19[12][0-9]{10}$")
 
@@ -114,7 +120,7 @@ def fetch_image(url=None):
         response = requests.get(url)
         response.raise_for_status()
         # access JSOn content
-        return Image.open(BytesIO(response.content))
+        return PILImage.open(BytesIO(response.content))
 
     except HTTPError as http_err:
         print(f'HTTP error occurred: {http_err}')
@@ -139,7 +145,7 @@ def to_excel(df=None, dffile=None, excelfile=None):
         ws[f"{get_column_letter(i + 1)}1"] = columns[i]
 
     for idx, url in enumerate(tqdm(df['image url'])):
-        img = fetch_image(url)
+        img = fetch_image(url=url)
         ws.add_image(img, f"{get_column_letter(1)}{idx + 2}")
         time.sleep(1.2)
         for j, k in enumerate(columns[1:]):
@@ -158,7 +164,7 @@ def main(csvfile=os.path.join(os.path.dirname(__file__), "..", "csv", "books.csv
 
     data = {}
     for idx, i in enumerate(tqdm(list(df['ISBN']))):
-        data = js2row(di=data, json=fetch(isbn=df['ISBN'][0]))
+        data = js2row(di=data, json=fetch(isbn=i))
         time.sleep(1.2)
 
     df_out = pd.DataFrame(data, columns=[
