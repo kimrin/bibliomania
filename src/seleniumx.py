@@ -1,17 +1,22 @@
 # -*- coding: UTF-8 -*-
 
+import json
 import os
 import re
 import time
+from pprint import pprint
 
 import pandas as pd
+import regex
 from bs4 import BeautifulSoup
 from selenium.common.exceptions import StaleElementReferenceException
 from selenium.webdriver import Chrome
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 
-from credentials import CRED
+from credentials import CRED, RAKUTEN_ID
+from googlex import google_books
+from rakuten import rakuten, rakuten_foreign
 
 
 def get_handle():
@@ -125,6 +130,43 @@ def honto(url, driver=None, csv="./honto.csv"):
     return df
 
 
+def get_kinokuniya_book_details(driver=None, from_id=0, to_id=12):
+    ret = []
+    numx = re.compile('([0-9]+)')
+
+    items = to_id - from_id + 1
+
+    for i in range(1, (items + 1)):
+        dic = {}
+        try:
+            a = driver.find_element(
+                By.XPATH, f'//*[@id="mypage_box"]/form[4]/div[3]/div[{i}]/div/div[2]/h3/a')
+
+            isbn = int(numx.findall(a.get_attribute('href'))[-1])
+
+            dic['isbn'] = isbn
+
+            try:
+                price = driver.find_element(
+                    By.XPATH, f'//*[@id="mypage_box"]/form[4]/div[3]/div[{i}]/div/div[2]/div[2]/span').get_attribute('innerText')
+                price = int("".join(price.split(','))[1:])
+            except:
+                price = 'なし'
+
+            dic['price'] = price
+
+            driver.find_element(
+                By.XPATH,  f'//*[@id="mypage_box"]/form[4]/div[3]/div[{i}]/div/div[2]/h3/a').click()
+
+            driver.back()
+
+            ret.append(dic)
+        except:
+            dic = {'isbn': '', 'price': 'なし'}
+
+    return ret
+
+
 def kinokuniya(url, driver=None, csv="./kinokuniya.csv"):
     sitecred = CRED[url]
     driver.get(url)
@@ -145,19 +187,50 @@ def kinokuniya(url, driver=None, csv="./kinokuniya.csv"):
     driver.find_element(
         By.XPATH, '//*[@id="mypage_box"]/form[4]/div[1]/div/ul/li[3]/a').click()
 
-    for i in range(1, 13):
-        price = driver.find_element(
-            By.XPATH, f'//*[@id="mypage_box"]/form[4]/div[3]/div[{i}]/div/div[2]/div[2]/span').get_attribute('innerText')
-        price = int("".join(price.split(','))[1:])
+    li_list = driver.find_element(
+        By.XPATH, '//*[@id="mypage_box"]/form[4]/div[2]/div[2]/ul').find_elements_by_tag_name('li')
 
-        driver.find_element(
-            By.XPATH,  f'//*[@id="mypage_box"]/form[4]/div[3]/div[{i}]/div/div[2]/h3/a').click()
-        driver.back()
+    ret = []
 
-    # driver.find_element(
-    #     By.XPATH, '//*[@id="main_contents"]/form/div/div[2]/h3/text()[1]')
+    is_last = False
 
-    return None
+    while is_last is False:
+        from_to_string = driver.find_element(
+            By.XPATH, '//*[@id="mypage_box"]/form[4]/div[2]/div[1]').get_attribute('innerText')
+
+        numx = re.compile('([0-9]+)')
+        nums = numx.findall(from_to_string)
+        # print(nums)
+
+        from_id, to_id, all_ids = [int(x) for x in nums]
+        items = to_id - from_id + 1
+
+        ret.extend(get_kinokuniya_book_details(
+            driver=driver, from_id=from_id, to_id=to_id))
+
+        if to_id == all_ids:
+            is_last = True
+            break
+
+        li_list = driver.find_element(
+            By.XPATH, '//*[@id="mypage_box"]/form[4]/div[2]/div[2]/ul').find_elements_by_tag_name('li')
+        try:
+            li_list[-1].find_elements_by_tag_name('a')[0].click()
+        except:
+            is_last = True
+            break
+        li_list = driver.find_element(
+            By.XPATH, '//*[@id="mypage_box"]/form[4]/div[2]/div[2]/ul').find_elements_by_tag_name('li')
+        try:
+            a = li_list[-1].find_elements_by_tag_name('a')
+        except:
+            is_last = True
+
+    df = pd.DataFrame.from_records(ret)
+
+    df.to_csv(csv)
+
+    return df
 
 
 def in_out(prefix_dir="C:/Users/kitty/Dropbox/My PC (DESKTOP-MT0S3I6)/Downloads/", prefix_files="収入・支出詳細_2020-"):
@@ -171,14 +244,85 @@ def in_out(prefix_dir="C:/Users/kitty/Dropbox/My PC (DESKTOP-MT0S3I6)/Downloads/
     return pd.concat(file_list).sort_values(by=['日付'])
 
 
-with Chrome(executable_path=r'C:\Users\kitty\ChromeDriver\chromedriver.exe') as driver:
-    # print(dir(driver))
-    sites = list(CRED.keys())
-    hont_df = honto(url=sites[0], driver=driver)
-    kinokuniya_df = kinokuniya(url=sites[1], driver=driver)
+def shallow_dict(x, ret):
+    if type(x) == type([]):
+        li = []
+        for i in x:
+            ta = type(i)
+            if ta == type("") or ta == type(1) or ta == type(1.0):
+                li.append(i)
+            else:
+                ret = shallow_dict(i, ret)
+        return " ".join(li)
 
-    df_2020 = in_out()
-    df_2020_nona = df_2020[df_2020.notna()['内容']]
-    df_kinokuniya_mf = df_2020_nona[df_2020_nona['内容'].str.contains(
-        '紀伊國屋') | df_2020_nona['内容'].str.contains('inokuniya') | df_2020_nona['内容'].str.contains('キノクニヤ')]
-    print(df_kinokuniya_mf)
+    if type(x) == type({}):
+        if len(x) > 0:
+            for k, v in x.items():
+                sh = shallow_dict(v, ret)
+                if type(sh) == type({}) and len(sh) > 0:
+                    ret.update(sh)
+                elif type(sh) == type(""):
+                    ret[k] = sh
+                elif type(sh) == type("") or type(sh) == type(1) or type(sh) == type(1.0):
+                    ret[k] = sh
+                # t = type(v)
+                # if t == type("") or t == type(1) or t == type(1.0):
+                #     ret[k] = v
+                # elif t == type([]):
+                #     li = []
+                #     for idx in v:
+                #         ta = type(v)
+                #         if ta == type("") or ta == type(1) or ta == type(1.0):
+                #             li.append(v)
+                #         else:
+                #             ret, _ = shallow_dict(v, ret)
+                #             ret.update(ret)
+                #     ret[k] = " ".join(li)
+                # elif t == type({}):
+                #     for k2, v2 in v.items():
+                #         ret, _ = shallow_dict({k2: v2}, ret)
+    return ret
+
+
+# with Chrome(executable_path=r'C:\Users\kitty\ChromeDriver\chromedriver.exe') as driver:
+#     # print(dir(driver))
+#     sites = list(CRED.keys())
+#     # hont_df = honto(url=sites[0], driver=driver)
+#     # kinokuniya_df = kinokuniya(url=sites[1], driver=driver)
+if True:
+    hont_df = pd.read_csv("./honto.csv")
+    kinokuniya_df = pd.read_csv("./kinokuniya.csv")
+
+df_2020 = in_out()
+df_2020_nona = df_2020[df_2020.notna()['内容']]
+df_kinokuniya_mf = df_2020_nona[df_2020_nona['内容'].str.contains(
+    '紀伊國屋') | df_2020_nona['内容'].str.contains('inokuniya') | df_2020_nona['内容'].str.contains('キノクニヤ')]
+print(df_kinokuniya_mf)
+df_kinokuniya_mf.to_csv('kinokuniya_moneyforward.csv')
+
+hont_isbn = []
+for id, title in enumerate(hont_df['title']):
+    time.sleep(0.5)
+    # p = re.compile(r'([A-Za-z0-9.,/()Ａ-Ｚａ-ｚ０-９]+)')
+    print(f"{id}: {title}")
+    ret = None
+    # if p.match(title):
+    # print('do google search:')
+    js = google_books(args={"q": "+".join(title.split(" "))})
+    # pprint(js)
+    ret = shallow_dict(js["items"][0], {})
+    js2 = rakuten(args={'applicationId': f'{RAKUTEN_ID}',
+                        'keyword': title})
+    if len(js2['Items']) == 0:
+        ret2 = {}
+    else:
+        ret2 = js2['Items'][0]['Item']
+
+    if ret2.get('price', None) is not None:
+        ret['price'] = ret2.get('price')
+
+    hont_isbn.append(ret)
+
+df_hont_rakuten = pd.DataFrame.from_records(hont_isbn)
+df_hont_rakuten.to_csv("./honto_google_api.csv")
+print(df_hont_rakuten)
